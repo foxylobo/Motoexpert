@@ -29,6 +29,27 @@ jobs:
           archive=$(find . -maxdepth 1 -type f -iname '*.zip' | head -n 1)
           if [ -z "$archive" ]; then echo 'No se encontró el ZIP del proyecto'; exit 1; fi
           unzip "$archive" -d source
+      - name: Corregir compatibilidad Java y Kotlin
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('source/MOTOEXPERT_Android_MVP/app/build.gradle.kts')
+          s = p.read_text()
+          marker = '    buildFeatures { compose = true }'
+          replacement = '''    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    buildFeatures { compose = true }'''
+          if marker not in s:
+              raise SystemExit('No se encontró la configuración esperada')
+          p.write_text(s.replace(marker, replacement, 1))
+          PY
 
       - name: Compilar APK
         run: gradle -p source/MOTOEXPERT_Android_MVP assembleDebug
