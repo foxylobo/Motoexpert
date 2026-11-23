@@ -23,20 +23,31 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Extraer proyecto Android
+      - name: Preparar código del proyecto
         run: |
-          mkdir source
+          mkdir -p workdir
           archive=$(find . -maxdepth 1 -type f -iname '*.zip' | head -n 1)
-          if [ -z "$archive" ]; then echo 'No se encontró el ZIP del proyecto'; exit 1; fi
-          unzip "$archive" -d source
-      - name: Corregir compatibilidad Java y Kotlin
+          if [ -n "$archive" ]; then
+            unzip -q "$archive" -d workdir
+          elif [ -d "MOTOEXPERT_Android_MVP" ]; then
+            cp -r MOTOEXPERT_Android_MVP workdir/MOTOEXPERT_Android_MVP
+          else
+            cp -r . workdir/project
+          fi
+
+      - name: Ajustar Java 17 y Kotlin 17 si existe build.gradle.kts
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('source/MOTOEXPERT_Android_MVP/app/build.gradle.kts')
-          s = p.read_text()
-          marker = '    buildFeatures { compose = true }'
-          replacement = '''    compileOptions {
+
+          candidates = list(Path('workdir').rglob('app/build.gradle.kts'))
+          if not candidates:
+              raise SystemExit('No se encontró app/build.gradle.kts dentro del proyecto')
+
+          p = candidates[0]
+          s = p.read_text(encoding='utf-8')
+
+          block = '''    compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -44,19 +55,32 @@ jobs:
     kotlinOptions {
         jvmTarget = "17"
     }
-
-    buildFeatures { compose = true }'''
-          if marker not in s:
-              raise SystemExit('No se encontró la configuración esperada')
-          p.write_text(s.replace(marker, replacement, 1))
+'''
+          if 'sourceCompatibility = JavaVersion.VERSION_17' not in s:
+              target = 'buildFeatures'
+              idx = s.find(target)
+              if idx != -1:
+                  line_start = s.rfind('\n', 0, idx) + 1
+                  s = s[:line_start] + block + s[line_start:]
+              else:
+                  s = s + '\n' + block
+              p.write_text(s, encoding='utf-8')
           PY
 
       - name: Compilar APK
-        run: gradle -p source/MOTOEXPERT_Android_MVP assembleDebug
+        run: |
+          gradle_file=$(find workdir -name "build.gradle.kts" -o -name "build.gradle" | head -n 1)
+          proj_dir=$(dirname "$gradle_file")
+          if [ -f "$proj_dir/gradlew" ]; then
+            chmod +x "$proj_dir/gradlew"
+            (cd "$proj_dir" && ./gradlew assembleDebug)
+          else
+            gradle -p "$proj_dir" assembleDebug
+          fi
 
       - name: Guardar APK
         uses: actions/upload-artifact@v4
         with:
           name: MOTOEXPERT-APK
-          path: source/MOTOEXPERT_Android_MVP/app/build/outputs/apk/debug/app-debug.apk
+          path: workdir/**/build/outputs/apk/debug/*.apk
           if-no-files-found: error
